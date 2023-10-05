@@ -1,0 +1,425 @@
+---
+title: "Design of Combinatorial Algorithms"
+author: "Ivar Schilstra" 
+        "Pietro Mietto"
+date: "20-02-2022"
+output: pdf_document
+---
+
+```{r}
+library(readxl)
+library(readr)
+library(tidyverse)
+library(writexl)
+```
+
+```{r}
+rm(list=ls())
+
+source("~/functions.R")
+
+# Lookup table
+g_values <- as.matrix(read_excel(path = "~/lookup table.xlsx", sheet = 1, col_names = F, range = "C3:AF272"))
+h_values <- as.matrix(read_excel(path = "~/lookup table.xlsx", sheet = 2, col_names = F, range = "C3:AF272"))
+f_values <- as.matrix(read_excel(path = "~/lookup table.xlsx", sheet = 3, col_names = F, range = "C3:AF272"))
+
+# First dimension # number of aisles
+# Second dimension # number of cross aisles + 1
+# Third dimension # number of items
+
+g <- array(g_values, dim = c(30,9,30), dimnames = list(c(1:30),c(2:10),c(1:30)))
+h <- array(h_values, dim = c(30,9,30), dimnames = list(c(1:30),c(2:10),c(1:30)))
+f <- array(f_values, dim = c(30,9,30), dimnames = list(c(1:30),c(2:10),c(1:30)))
+
+for (i in 1:30){
+  g[i,,] <- g_values[(-8+9*i):(9*i),1:30]
+  h[i,,] <- h_values[(-8+9*i):(9*i),1:30]
+  f[i,,] <- f_values[(-8+9*i):(9*i),1:30]
+}
+
+#    Example, 
+#    n_i = 10 aisles
+#    k_i = 4+1 cross aisles
+#    m = 28 items
+#    g[10,4,28] = 4.475403
+
+# Instance 1
+Inst1 <- read_excel(path = "~/inst1.xlsx", col_names = F)
+
+# Data
+W <- as.numeric(Inst1[1,1]) # width of the entire warehouse
+D <- as.numeric(Inst1[2,1]) # depth of the entire warehouse
+Z <- as.numeric(Inst1[3,1]) # number of picking areas
+w_i <- as.numeric(Inst1[4,1]) # aisle width (same for each department)
+v_i <- as.numeric(Inst1[5,1]) # cross aisle width (same for each department)
+
+# Total required aisle length for each picking area
+#S_i <- as.numeric(Inst1[6:(6+Z-1),1])
+S_i <- as.numeric(Inst1[6,1:Z])
+
+# The average number of replenishments needed per order for each picking area 
+#alpha_i <- as.numeric(Inst1[(6+Z):(6+Z+Z-1),1])
+alpha_i <- as.numeric(Inst1[7,1:Z])
+
+# Probabilities that an order in picking area 1 consists of m = 1, ..., 30 items
+#U <- as.data.frame(matrix(Inst1[(6+Z+Z):(6+Z+Z+30*Z-1),1], nrow = Z, ncol =  30, byrow = TRUE))
+U <- as.data.frame(Inst1[8:(8+Z-1),1:30])
+```
+
+
+```{r}
+## -------------------- ALNS FRAMEWORK HORIZONTAL ---------------------------
+
+## Input
+noImpvMax                                <- 10
+max_iteration                            <- 300
+a                                        <- 0
+
+## Initial Solution
+Results_Initial_Solution_horizontal      <- Function_Initial_solution_horizontal(Z, g, h, f, U, w_i, v_i, D, W, alpha_i, S_i)
+
+if (Results_Initial_Solution_horizontal[[1]][[1]][1] == -1){
+    
+    ## Create output file
+    Output <- matrix(ncol = 1, nrow = 3)                                 # Matrix output file
+    Output[1,1] <- "A5"                                                  # Team number
+    Output[2,1] <- 5                                                     # Instance number
+    Output[3,1] <- Results_Initial_Solution_horizontal[[1]][[1]]         # Objective function value
+    
+    Output <- as.matrix(Output)
+    
+  } else {
+    
+    Current_Objective_Summary                <- Results_Initial_Solution_horizontal[[1]]
+    Current_data_structure                   <- Results_Initial_Solution_horizontal[[2]]
+    direction                                <- Results_Initial_Solution_horizontal[[3]]
+    
+    ## Set starting temperature --- let it depend on the starting objective value
+    if (Z < 6){
+      temperature_start <- (Current_Objective_Summary$n_obj * 0.01)*1.10
+    } else{
+      temperature_start <- Current_Objective_Summary$n_obj * 0.01
+    }
+    
+    ## Store initial Solution as best Solution 
+    Best_Objective_Summary                   <- Current_Objective_Summary
+    Best_data_structure                      <- Current_data_structure
+    Optimal_Objective_Summary                <- Best_Objective_Summary
+    Optimal_data_structure                   <- Best_data_structure
+    
+    ## Store variables
+    noImpv                                   <- 0
+    cur_iteration                            <- 0
+    Destory_heu1                             <- 0
+    Destory_heu2                             <- 0
+    Destory_heu3                             <- 0
+    Destory_heu4                             <- 0
+    Destory_heu5                             <- 0
+    Destory_heu6                             <- 0
+    Destory_heu7                             <- 0
+    heu_tab                                  <- rbind(Destory_heu1, Destory_heu2, Destory_heu3, 
+                                                      Destory_heu4,Destory_heu5,Destory_heu6,Destory_heu7)
+    heuristic_sample                         <- c(rep(1/6,6))
+    
+    Obj_value                                <- c(Current_Objective_Summary$n_obj)
+    acceptance_probability_Obj_value         <- c(0)
+    random_number_Obj_value                  <- c(0)
+    Destroy_Heuristsic2                      <- c()
+    Repair_Heuristic2                        <- c()
+    
+    
+    visualize(W = W,D = D,startingpoint_x = Current_Objective_Summary[[2]][,5], x_dimension =  Current_Objective_Summary[[2]][,7],
+              startingpoint_y = Current_Objective_Summary[[2]][,4], y_dimension = Current_Objective_Summary[[2]][,8],
+              Solution = Current_Objective_Summary[[2]][,1])
+    Current_Objective_Summary
+  }
+```
+
+```{r}
+## ---------------------- CONTINUE HORIZONTAL FRAMEWORK --------------------
+
+    while(cur_iteration < max_iteration){
+    
+    ## Choose a destroy method and calculate the Solution
+    Obj_prev                                   <- Current_Objective_Summary$n_obj
+    Results12                                  <- function_heuristic2(Z, g, h, f, U, w_i, v_i, D, W,alpha_i, S_i,Current_data_structure, 
+                                                                     Current_Objective_Summary, direction, heu_tab, heuristic_sample)
+    heu_tab                                    <- Results12[[2]]
+    Heuristic1                                 <- Results12[[3]]
+    
+    ## Calculate the temperature
+    cur_iteration                              <- cur_iteration + 1
+    temperature                                <- temperature_start*(1 - cur_iteration/max_iteration)
+    acceptance_probability                     <- exp((Current_Objective_Summary$n_obj-Results12[[1]]$n_obj)/(temperature+0.00000001))
+    random_number                              <- runif(1)
+    
+    ## Calculate acceptance
+    if (random_number < acceptance_probability){
+      Current_Objective_Summary                <- Results12[[1]]
+      Current_data_structure                   <- Results12[[1]]$Solution
+    } 
+    
+    ## Calculate if f(x) < f(x*)
+    if (Current_Objective_Summary$n_obj < Best_Objective_Summary$n_obj){
+      Best_Objective_Summary                   <- Current_Objective_Summary
+      Best_data_structure                      <- Current_data_structure
+      noImpv                                   <- 0
+    } else {
+      noImpv                                   <- noImpv + 1
+      if (noImpv > noImpvMax){
+        Current_Objective_Summary              <- Best_Objective_Summary
+        Current_data_structure                 <- Best_data_structure
+      }
+    }
+    
+    ## Calculate Optimal vs Best Solution
+    if (Best_Objective_Summary$n_obj        < Optimal_Objective_Summary$n_obj){
+        Optimal_Objective_Summary              <- Best_Objective_Summary
+        Optimal_data_structure                 <- Best_data_structure
+    }
+    
+    
+    ## Start over method
+    if (noImpv > 50 && Z < 10){
+      if (a == 0){
+        Optimal_Objective_Summary              <- Best_Objective_Summary
+        Optimal_data_structure                 <- Best_data_structure
+        a                                      <- 1
+      }
+      Results_Initial_Solution2                <- Function_Initial_solution_horizontal(Z, g, h, f, U, w_i, v_i, D, W, alpha_i, S_i)
+      Current_Objective_Summary                <- Results_Initial_Solution2[[1]]
+      Current_data_structure                   <- Results_Initial_Solution2[[2]]
+      direction                                <- Results_Initial_Solution2[[3]]
+      noImpv <- 0
+      Best_Objective_Summary                   <- Current_Objective_Summary
+      Best_data_structure                      <- Current_data_structure
+      heuristic_sample                         <- c(rep(1/5,6))
+    }
+    ## Update probability scores
+    heuristic_sample <- update_probabilities(Obj_prev,Current_Objective_Summary,Heuristic1,heuristic_sample)
+    
+    ## Just to see what is happening 
+    Obj_value[cur_iteration] <- Current_Objective_Summary$n_obj
+    acceptance_probability_Obj_value[cur_iteration] <- acceptance_probability
+    random_number_Obj_value[cur_iteration] <- random_number
+    Destroy_Heuristsic2[cur_iteration] <- as.numeric(Results12[[3]])
+    Repair_Heuristic2[cur_iteration] <- as.numeric(Results12[[4]])
+    
+    # Visualize movements
+    if(Obj_prev != Current_Objective_Summary$n_obj){
+      visualize(W = W,D = D,startingpoint_x = Current_Objective_Summary[[2]][,5], x_dimension =  Current_Objective_Summary[[2]][,7],
+            startingpoint_y = Current_Objective_Summary[[2]][,4], y_dimension = Current_Objective_Summary[[2]][,8],
+            Solution = Current_Objective_Summary[[2]][,1])
+    }
+    
+  }
+  
+  #cbind(Obj_value,acceptance_probability_Obj_value,random_number_Obj_value,Destroy_Heuristsic2,Repair_Heuristic2)
+  visualize(W = W,D = D,startingpoint_x = Optimal_Objective_Summary[[2]][,5], x_dimension =  Optimal_Objective_Summary[[2]][,7],
+            startingpoint_y = Optimal_Objective_Summary[[2]][,4], y_dimension = Optimal_Objective_Summary[[2]][,8],
+            Solution = Optimal_Objective_Summary[[2]][,1])
+  Optimal_Objective_Summary
+  
+  Iteration <- c(1:(length(Obj_value)))
+  plot(x = Iteration, y = Obj_value, type = "l") + abline(h = min(Obj_value), col = "red")
+
+```   
+
+
+```{r}
+## -------------------- ALNS FRAMEWORK VERTICAL ---------------------------
+
+## Input
+noImpvMax                                <- 10
+max_iteration                            <- 300
+a                                        <- 0
+
+## Initial Solution
+Results_Initial_Solution_vertical        <- Function_Initial_solution_vertical(Z, g, h, f, U, w_i, v_i, D, W, alpha_i, S_i)
+
+if (Results_Initial_Solution_vertical[[1]][[1]][1] == -1){
+    
+    ## Create output file
+    Output <- matrix(ncol = 1, nrow = 3)                                 # Matrix output file
+    Output[1,1] <- "A5"                                                  # Team number
+    Output[2,1] <- 5                                                     # Instance number
+    Output[3,1] <- Results_Initial_Solution_vertical[[1]]                # Objective function value
+    
+    Output <- as.matrix(Output[[i]])
+  } else {
+    
+    Current_Objective_Summary                <- Results_Initial_Solution_vertical[[1]]
+    Current_data_structure                   <- Results_Initial_Solution_vertical[[2]]
+    direction                                <- Results_Initial_Solution_vertical[[3]]
+    
+    ## Set starting temperature --- let it depend on the starting objective value
+    if (Z < 6){
+      temperature_start <- (Current_Objective_Summary$n_obj * 0.01)*1.10
+    } else{
+      temperature_start <- Current_Objective_Summary$n_obj * 0.01
+    }
+    
+    ## Store initial Solution as best Solution 
+    Best_Objective_Summary2                   <- Current_Objective_Summary
+    Best_data_structure2                      <- Current_data_structure
+    Optimal_Objective_Summary2                <- Best_Objective_Summary2
+    Optimal_data_structure2                   <- Best_data_structure2
+    
+    ## Store variables
+    noImpv                                   <- 0
+    cur_iteration                            <- 0
+    Destory_heu1                             <- 0
+    Destory_heu2                             <- 0
+    Destory_heu3                             <- 0
+    Destory_heu4                             <- 0
+    Destory_heu5                             <- 0
+    Destory_heu6                             <- 0
+    Destory_heu7                             <- 0
+    heu_tab                                  <- rbind(Destory_heu1, Destory_heu2, Destory_heu3, 
+                                                      Destory_heu4, Destory_heu5,Destory_heu6,Destory_heu7)
+    heuristic_sample                         <- c(rep(1/6,6))
+    
+    Obj_value                                <- c(Current_Objective_Summary$n_obj)
+    acceptance_probability_Obj_value         <- c(0)
+    random_number_Obj_value                  <- c(0)
+    Destroy_Heuristsic2                      <- c()
+    Repair_Heuristic2                        <- c()
+    
+    
+    visualize(W = W,D = D,startingpoint_x = Current_Objective_Summary[[2]][,5], x_dimension =  Current_Objective_Summary[[2]][,7],
+              startingpoint_y = Current_Objective_Summary[[2]][,4], y_dimension = Current_Objective_Summary[[2]][,8],
+              Solution = Current_Objective_Summary[[2]][,1])
+    Current_Objective_Summary
+  }
+```
+
+```{r}
+## ---------------------- CONTINUE VERTICAL FRAMEWORK --------------------
+
+    while(cur_iteration < max_iteration){
+    
+    ## Choose a destroy method and calculate the Solution
+    Obj_prev                                   <- Current_Objective_Summary$n_obj
+    Results12                                  <- function_heuristic2(Z, g, h, f, U, w_i, v_i, D, W,alpha_i, S_i,Current_data_structure, 
+                                                                     Current_Objective_Summary, direction, heu_tab, heuristic_sample)
+    heu_tab                                    <- Results12[[2]]
+    Heuristic1                                 <- Results12[[3]]
+    
+    ## Calculate the temperature
+    cur_iteration                              <- cur_iteration + 1
+    temperature                                <- temperature_start*(1 - cur_iteration/max_iteration)
+    acceptance_probability                     <- exp((Current_Objective_Summary$n_obj-Results12[[1]]$n_obj)/(temperature+0.00000001))
+    random_number                              <- runif(1)
+    
+    ## Calculate acceptance
+    if (random_number < acceptance_probability){
+      Current_Objective_Summary                <- Results12[[1]]
+      Current_data_structure                   <- Results12[[1]]$Solution
+    } 
+    
+    ## Calculate if f(x) < f(x*)
+    if (Current_Objective_Summary$n_obj < Best_Objective_Summary2$n_obj){
+      Best_Objective_Summary2                  <- Current_Objective_Summary
+      Best_data_structure2                     <- Current_data_structure
+      noImpv                                   <- 0
+    } else {
+      noImpv                                   <- noImpv + 1
+      if (noImpv > noImpvMax){
+        Current_Objective_Summary              <- Best_Objective_Summary2
+        Current_data_structure                 <- Best_data_structure2
+      }
+    }
+    
+    ## Calculate Optimal vs Best Solution
+    if (Best_Objective_Summary2$n_obj < Optimal_Objective_Summary2$n_obj){
+        Optimal_Objective_Summary2             <- Best_Objective_Summary2
+        Optimal_data_structure2                <- Best_data_structure2
+    }
+    
+    
+    ## Start over method
+    if (noImpv > 50 && Z < 10){
+      if (a == 0){
+        Optimal_Objective_Summary2             <- Best_Objective_Summary2
+        Optimal_data_structure2                <- Best_data_structure2
+        a                                      <- 1
+      }
+      Results_Initial_Solution2                <- Function_Initial_solution_vertical(Z, g, h, f, U, w_i, v_i, D, W, alpha_i, S_i)
+      Current_Objective_Summary                <- Results_Initial_Solution2[[1]]
+      Current_data_structure                   <- Results_Initial_Solution2[[2]]
+      direction                                <- Results_Initial_Solution2[[3]]
+      noImpv <- 0
+      Best_Objective_Summary2                  <- Current_Objective_Summary
+      Best_data_structure2                     <- Current_data_structure
+      heuristic_sample                         <- c(rep(1/5,6))
+    }
+    ## Update probability scores
+    heuristic_sample <- update_probabilities(Obj_prev,Current_Objective_Summary,Heuristic1,heuristic_sample)
+    
+    ## Just to see what is happening 
+    Obj_value[cur_iteration] <- Current_Objective_Summary$n_obj
+    acceptance_probability_Obj_value[cur_iteration] <- acceptance_probability
+    random_number_Obj_value[cur_iteration] <- random_number
+    Destroy_Heuristsic2[cur_iteration] <- as.numeric(Results12[[3]])
+    Repair_Heuristic2[cur_iteration] <- as.numeric(Results12[[4]])
+    
+    # Visualize movements
+    #if(Obj_prev != Current_Objective_Summary$n_obj){
+    #  visualize(W = W,D = D,startingpoint_x = Current_Objective_Summary[[2]][,5], x_dimension =  Current_Objective_Summary[[2]][,7],
+    #        startingpoint_y = Current_Objective_Summary[[2]][,4], y_dimension = Current_Objective_Summary[[2]][,8],
+    #        Solution = Current_Objective_Summary[[2]][,1])
+    #}
+  }
+  
+  #cbind(Obj_value,acceptance_probability_Obj_value,random_number_Obj_value,Destroy_Heuristsic2,Repair_Heuristic2)
+  visualize(W = W,D = D,startingpoint_x = Optimal_Objective_Summary2[[2]][,5], x_dimension =  Optimal_Objective_Summary2[[2]][,7],
+            startingpoint_y = Optimal_Objective_Summary2[[2]][,4], y_dimension = Optimal_Objective_Summary2[[2]][,8],
+            Solution = Optimal_Objective_Summary2[[2]][,1])
+  Optimal_Objective_Summary2
+  
+  Iteration <- c(1:(length(Obj_value)))
+  plot(x = Iteration, y = Obj_value, type = "l") + abline(h = min(Obj_value), col = "red")
+
+```
+
+```{r}
+## ------------------- Compare both direction results -------------------
+
+if (Optimal_Objective_Summary$n_obj > Optimal_Objective_Summary2$n_obj){
+  Optimal_data_structure_best <- Optimal_data_structure2
+  Optimal_Objective_Summary_best <- Optimal_Objective_Summary2
+} else{
+  Optimal_data_structure_best <- Optimal_data_structure
+  Optimal_Objective_Summary_best <- Optimal_Objective_Summary
+}
+visualize(W = W,D = D,startingpoint_x = Optimal_Objective_Summary_best[[2]][,5], x_dimension =  Optimal_Objective_Summary_best[[2]][,7],
+            startingpoint_y = Optimal_Objective_Summary_best[[2]][,4], y_dimension = Optimal_Objective_Summary_best[[2]][,8],
+            Solution = Optimal_Objective_Summary_best[[2]][,1])
+Optimal_Objective_Summary_best
+```
+
+```{r}
+## ------------------ EXTRA SEPERATE FEASIBILITY CHECK --------------------
+feasibility_check(Optimal_Objective_Summary_best,Z,W,D,S_i)
+```
+
+
+```{r}
+## Create output file
+Output <- matrix(ncol = 4, nrow = Z + 3)                                  # Matrix output file
+Output[1,1] <- "A5"                                                       # Team number
+Output[2,1] <- 1                                                          # Instance number
+Output[3,1] <- round(Optimal_Objective_Summary_best[[4]], digits = 2)     # Objective function value
+
+for (i in 1:Z){                                                           # Values each instance
+  Output[3+i,1] <- Optimal_Objective_Summary_best[[2]][i,5]               # x-startingpoint
+  Output[3+i,2] <- Optimal_Objective_Summary_best[[2]][i,4]               # y-startingpoint
+  Output[3+i,3] <- Optimal_Objective_Summary_best[[2]][i,3]               # number of aisles  
+  Output[3+i,4] <- Optimal_Objective_Summary_best[[2]][i,6]               # number of cross-aisles   
+}
+
+Output <- as.data.frame(Output)
+
+Output
+```
+
